@@ -192,6 +192,8 @@ function bootstrap_data_dirs(): void
         DATA_DIR . '/vectors',
         DATA_DIR . '/digests',
         DATA_DIR . '/chats',
+        DATA_DIR . '/chats/sessions',
+        DATA_DIR . '/logs',
     ];
     foreach ($dirs as $dir) {
         if (!is_dir($dir)) {
