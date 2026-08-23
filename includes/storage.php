@@ -971,6 +971,126 @@ function get_thought_map_data(): array
         }
     }
 
+    // Find connected components (groups/clusters) for edges with similarity >= 0.30
+    $adj = [];
+    foreach ($nodes as $n) {
+        $adj[$n['id']] = [];
+    }
+    foreach ($edges as $e) {
+        if ($e['similarity'] >= 0.30) {
+            $adj[$e['source']][] = $e['target'];
+            $adj[$e['target']][] = $e['source'];
+        }
+    }
+
+    $visited = [];
+    $groups = [];
+    $group_index = 0;
+
+    foreach ($nodes as $n) {
+        $nid = $n['id'];
+        if (isset($visited[$nid])) continue;
+
+        $group_index++;
+        $gid = "group_{$group_index}";
+        $queue = [$nid];
+        $visited[$nid] = $gid;
+        $component_node_ids = [];
+
+        while (!empty($queue)) {
+            $curr = array_shift($queue);
+            $component_node_ids[] = $curr;
+            foreach ($adj[$curr] ?? [] as $neighbor) {
+                if (!isset($visited[$neighbor])) {
+                    $visited[$neighbor] = $gid;
+                    $queue[] = $neighbor;
+                }
+            }
+        }
+
+        // Determine dominant tag for group naming
+        $group_tag_counts = [];
+        foreach ($component_node_ids as $cnid) {
+            foreach ($node_tags_map[$cnid] ?? [] as $gt) {
+                $group_tag_counts[$gt] = ($group_tag_counts[$gt] ?? 0) + 1;
+            }
+        }
+        arsort($group_tag_counts);
+        $top_tag = !empty($group_tag_counts) ? ucfirst(key($group_tag_counts)) : 'General';
+
+        $g_color = $color_palette[($group_index - 1) % count($color_palette)];
+
+        $groups[$gid] = [
+            'id'       => $gid,
+            'name'     => count($component_node_ids) > 1 ? "Cluster {$group_index}: {$top_tag}" : "Standalone: {$top_tag}",
+            'topTag'   => $top_tag,
+            'color'    => $g_color,
+            'size'     => count($component_node_ids),
+            'nodeIds'  => $component_node_ids,
+        ];
+    }
+
+    // Attach group info to nodes
+    foreach ($nodes as &$n) {
+        $gid = $visited[$n['id']] ?? 'group_1';
+        $n['groupId']    = $gid;
+        $n['groupColor'] = $groups[$gid]['color'] ?? '#7c6af7';
+        $n['groupName']  = $groups[$gid]['name'] ?? 'General';
+    }
+    unset($n);
+
+    // Build hierarchical tree structure: Groups -> Primary Tags / Thoughts
+    $tree = [];
+    foreach ($groups as $gid => $ginfo) {
+        $group_tree_node = [
+            'id'       => $gid,
+            'name'     => $ginfo['name'],
+            'color'    => $ginfo['color'],
+            'count'    => $ginfo['size'],
+            'type'     => 'group',
+            'children' => [],
+        ];
+
+        // Group nodes by primary tag
+        $tag_subgroups = [];
+        foreach ($nodes as $n) {
+            if ($n['groupId'] === $gid) {
+                $ptag = !empty($n['primaryTag']) ? ucfirst($n['primaryTag']) : 'General';
+                if (!isset($tag_subgroups[$ptag])) {
+                    $tag_subgroups[$ptag] = [];
+                }
+                $tag_subgroups[$ptag][] = [
+                    'id'      => $n['id'],
+                    'name'    => $n['title'],
+                    'date'    => $n['date'],
+                    'tags'    => $n['tags'],
+                    'preview' => $n['preview'],
+                    'color'   => $n['groupColor'],
+                    'type'    => 'thought',
+                ];
+            }
+        }
+
+        foreach ($tag_subgroups as $tag_name => $thought_items) {
+            if (count($tag_subgroups) === 1 && $tag_name === $ginfo['topTag']) {
+                foreach ($thought_items as $ti) {
+                    $group_tree_node['children'][] = $ti;
+                }
+            } else {
+                $group_tree_node['children'][] = [
+                    'id'       => "{$gid}_tag_{$tag_name}",
+                    'name'     => $tag_name,
+                    'type'     => 'tag',
+                    'count'    => count($thought_items),
+                    'color'    => $ginfo['color'],
+                    'children' => $thought_items,
+                ];
+            }
+        }
+
+        $tree[] = $group_tree_node;
+    }
+
     $tags_output = [];
     foreach ($tag_counts as $t_clean => $cnt) {
         $tags_output[] = [
@@ -981,9 +1101,11 @@ function get_thought_map_data(): array
     }
 
     return [
-        'nodes' => $nodes,
-        'edges' => $edges,
-        'tags'  => $tags_output,
-        'count' => count($nodes),
+        'nodes'  => $nodes,
+        'edges'  => $edges,
+        'tags'   => $tags_output,
+        'groups' => array_values($groups),
+        'tree'   => $tree,
+        'count'  => count($nodes),
     ];
 }

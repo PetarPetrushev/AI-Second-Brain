@@ -1586,12 +1586,26 @@ document.getElementById('login-form')?.addEventListener('submit', async (e) => {
 
       <div class="map-btn-group">
         <select id="map-color-mode">
+          <option value="group">Color by Group</option>
           <option value="tag">Color by Tag</option>
           <option value="date">Color by Date</option>
         </select>
-        <button class="btn btn-secondary btn-sm" id="map-reset-btn" title="Reset View">🎯 Reset View</button>
+        <div class="sub-tabs" style="margin-bottom:0">
+          <button class="sub-tab active" id="btn-view-map">🗺️ Map</button>
+          <button class="sub-tab" id="btn-view-tree">🌳 Tree</button>
+        </div>
+        <button class="btn btn-secondary btn-sm" id="map-reset-btn" title="Reset View">🎯 Reset</button>
         <button class="btn btn-secondary btn-sm" id="map-pause-btn" title="Pause Physics">⏸️ Freeze</button>
       </div>
+    </div>
+
+    <!-- Tree View Container -->
+    <div id="map-tree-container" class="card" style="display:none; margin-bottom:16px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; border-bottom:1px solid var(--border); padding-bottom:10px;">
+        <h3 style="font-size:15px; font-weight:700; color:var(--text)">🌳 Hierarchical Thought Tree</h3>
+        <span class="text-xs text-dim" id="tree-summary-text">0 clusters</span>
+      </div>
+      <div id="tree-view-root" style="display:flex; flex-direction:column; gap:8px;"></div>
     </div>
 
     <div class="map-container" id="map-container">
@@ -3344,11 +3358,14 @@ function debounce(fn, ms) {
 let mapNodes = [];
 let mapEdges = [];
 let mapTags = [];
+let mapGroups = [];
+let mapTreeData = [];
 let mapNodeMap = {};
 let mapSimThreshold = 0.35;
 let mapPhysicsPaused = false;
 let mapAnimFrame = null;
-let mapColorMode = 'tag';
+let mapColorMode = 'group';
+let currentMapViewMode = 'map';
 
 const mapCamera = { x: 0, y: 0, zoom: 1 };
 let isPanningMap = false;
@@ -3374,6 +3391,8 @@ function initMapData(data) {
   const rawNodes = data.nodes || [];
   const rawEdges = data.edges || [];
   mapTags        = data.tags || [];
+  mapGroups      = data.groups || [];
+  mapTreeData    = data.tree || [];
 
   // Populate tag filter select dropdown
   const tagSelect = document.getElementById('map-tag-filter');
@@ -3383,23 +3402,7 @@ function initMapData(data) {
   }
 
   // Populate map legend
-  const legendEl = document.getElementById('map-legend');
-  if (legendEl) {
-    legendEl.innerHTML = mapTags.slice(0, 8).map(t => `
-      <div class="map-legend-item" data-tag="${esc(t.name)}">
-        <span class="map-legend-dot" style="background:${t.color}"></span>
-        <span>${esc(t.name)}</span>
-      </div>
-    `).join('');
-    legendEl.querySelectorAll('.map-legend-item').forEach(item => {
-      item.addEventListener('click', () => {
-        if (tagSelect) {
-          tagSelect.value = item.dataset.tag;
-          filterMapNodes();
-        }
-      });
-    });
-  }
+  renderMapLegend();
 
   // Initialize nodes with random initial positions around center
   const width  = mapCanvas.clientWidth || 800;
@@ -3435,9 +3438,44 @@ function initMapData(data) {
   document.getElementById('map-node-card').style.display = 'none';
 
   filterMapNodes();
-  if (!mapAnimFrame) {
+  renderTreeView();
+
+  if (currentMapViewMode === 'map' && !mapAnimFrame) {
     runMapLoop();
   }
+}
+
+function renderMapLegend() {
+  const legendEl = document.getElementById('map-legend');
+  if (!legendEl) return;
+
+  if (mapColorMode === 'group') {
+    legendEl.innerHTML = mapGroups.slice(0, 8).map(g => `
+      <div class="map-legend-item" data-group="${esc(g.id)}">
+        <span class="map-legend-dot" style="background:${g.color}"></span>
+        <span>${esc(g.name)}</span>
+      </div>
+    `).join('');
+  } else {
+    legendEl.innerHTML = mapTags.slice(0, 8).map(t => `
+      <div class="map-legend-item" data-tag="${esc(t.name)}">
+        <span class="map-legend-dot" style="background:${t.color}"></span>
+        <span>${esc(t.name)}</span>
+      </div>
+    `).join('');
+  }
+
+  legendEl.querySelectorAll('.map-legend-item').forEach(item => {
+    item.addEventListener('click', () => {
+      if (item.dataset.tag) {
+        const tagSelect = document.getElementById('map-tag-filter');
+        if (tagSelect) {
+          tagSelect.value = item.dataset.tag;
+          filterMapNodes();
+        }
+      }
+    });
+  });
 }
 
 function filterMapNodes() {
@@ -3478,6 +3516,107 @@ function updateAccessibleMapList(matchingNodes) {
   `).join('');
 }
 
+function renderTreeView() {
+  const rootEl = document.getElementById('tree-view-root');
+  const summaryEl = document.getElementById('tree-summary-text');
+  if (!rootEl) return;
+
+  const searchQuery = (document.getElementById('map-search')?.value || '').toLowerCase().trim();
+  const tagQuery = (document.getElementById('map-tag-filter')?.value || '').toLowerCase().trim();
+
+  if (summaryEl) {
+    summaryEl.textContent = `${mapGroups.length} cluster(s) · ${mapNodes.length} thought(s)`;
+  }
+
+  if (!mapTreeData.length) {
+    rootEl.innerHTML = '<div style="color:var(--text3); font-size:13px; padding:12px 0;">No thoughts available for tree view.</div>';
+    return;
+  }
+
+  let html = '';
+  mapTreeData.forEach(groupNode => {
+    // Filter matching thoughts in this group
+    const matchingChildren = [];
+    (groupNode.children || []).forEach(child => {
+      if (child.type === 'thought') {
+        const matchesQuery = !searchQuery || (child.name || '').toLowerCase().includes(searchQuery) || (child.preview || '').toLowerCase().includes(searchQuery);
+        const matchesTag   = !tagQuery || (child.tags || []).some(t => t.toLowerCase() === tagQuery);
+        if (matchesQuery && matchesTag) {
+          matchingChildren.push(child);
+        }
+      } else if (child.type === 'tag') {
+        const matchingSub = (child.children || []).filter(ti => {
+          const mq = !searchQuery || (ti.name || '').toLowerCase().includes(searchQuery) || (ti.preview || '').toLowerCase().includes(searchQuery);
+          const mt = !tagQuery || (ti.tags || []).some(t => t.toLowerCase() === tagQuery);
+          return mq && mt;
+        });
+        if (matchingSub.length > 0) {
+          matchingChildren.push({ ...child, children: matchingSub, count: matchingSub.length });
+        }
+      }
+    });
+
+    if (searchQuery || tagQuery) {
+      if (matchingChildren.length === 0) return;
+    }
+
+    html += `
+      <details open style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:8px 12px;">
+        <summary style="cursor:pointer; font-weight:600; font-size:14px; color:var(--text); display:flex; align-items:center; justify-content:space-between; user-select:none;">
+          <span style="display:inline-flex; align-items:center; gap:8px;">
+            <span style="width:10px; height:10px; border-radius:50%; background:${groupNode.color}; display:inline-block;"></span>
+            📦 ${esc(groupNode.name)}
+          </span>
+          <span class="tag" style="background:var(--surface3); color:var(--text2); font-size:11px;">${matchingChildren.length} items</span>
+        </summary>
+        <div style="margin-top:10px; padding-left:14px; display:flex; flex-direction:column; gap:6px; border-left:2px dashed var(--border);">
+    `;
+
+    matchingChildren.forEach(item => {
+      if (item.type === 'thought') {
+        html += renderTreeThoughtItem(item);
+      } else if (item.type === 'tag') {
+        html += `
+          <details open style="margin:4px 0;">
+            <summary style="cursor:pointer; font-size:13px; font-weight:600; color:var(--text2); user-select:none;">
+              🏷️ Tag: ${esc(item.name)} (${item.count})
+            </summary>
+            <div style="padding-left:14px; margin-top:6px; display:flex; flex-direction:column; gap:6px; border-left:1px solid var(--border);">
+              ${(item.children || []).map(renderTreeThoughtItem).join('')}
+            </div>
+          </details>
+        `;
+      }
+    });
+
+    html += `
+        </div>
+      </details>
+    `;
+  });
+
+  if (!html) {
+    rootEl.innerHTML = '<div style="color:var(--text3); font-size:13px; padding:12px 0;">No matching thoughts in tree view.</div>';
+    return;
+  }
+
+  rootEl.innerHTML = html;
+}
+
+function renderTreeThoughtItem(t) {
+  const tagsHtml = (t.tags || []).map(tg => `<span class="tag" style="font-size:10px">${esc(tg)}</span>`).join(' ');
+  return `
+    <div class="entry-card" style="padding:10px 12px; border-radius:8px; margin:2px 0;" onclick="openEntry('${esc(t.id)}')">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span style="font-weight:600; font-size:13px; color:var(--text);">📄 ${esc(t.name)}</span>
+        <span style="font-size:11px; color:var(--text3);">${esc(t.date)}</span>
+      </div>
+      ${t.preview ? `<div style="font-size:12px; color:var(--text2); margin-top:4px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">${esc(t.preview)}</div>` : ''}
+      <div style="margin-top:6px;">${tagsHtml}</div>
+    </div>
+  `;
+}
+
 function runMapLoop() {
   if (!document.getElementById('map-panel')?.classList.contains('active')) {
     mapAnimFrame = null;
@@ -3496,7 +3635,7 @@ function updateMapPhysics() {
   const cx = width / 2;
   const cy = height / 2;
 
-  // 1. Repulsion between all node pairs
+  // 1. Repulsion between all node pairs (stronger repulsive force between unrelated / different group nodes)
   const len = mapNodes.length;
   for (let i = 0; i < len; i++) {
     const nodeA = mapNodes[i];
@@ -3507,8 +3646,12 @@ function updateMapPhysics() {
       const distSq = dx * dx + dy * dy + 1;
       const dist = Math.sqrt(distSq);
 
-      if (dist < 350) {
-        const force = 1800 / (distSq + 100);
+      const sameGroup = nodeA.groupId && nodeA.groupId === nodeB.groupId;
+      const maxRepulsionDist = sameGroup ? 300 : 600;
+
+      if (dist < maxRepulsionDist) {
+        const baseForce = sameGroup ? 2200 : 5500;
+        const force = baseForce / (distSq + 100);
         const fx = (dx / dist) * force;
         const fy = (dy / dist) * force;
 
@@ -3520,7 +3663,7 @@ function updateMapPhysics() {
     }
   }
 
-  // 2. Spring forces along active edges
+  // 2. Spring forces along active edges (pull related nodes closely together)
   mapEdges.forEach(e => {
     if (e.similarity < mapSimThreshold) return;
     const source = mapNodeMap[e.source];
@@ -3530,9 +3673,9 @@ function updateMapPhysics() {
     const dx = target.x - source.x;
     const dy = target.y - source.y;
     const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-    const targetDist = 180 * (1 - e.similarity * 0.6);
+    const targetDist = 110 * (1 - e.similarity * 0.65);
     const delta = dist - targetDist;
-    const force = delta * 0.02 * (e.similarity || 0.5);
+    const force = delta * 0.03 * (e.similarity || 0.5);
 
     const fx = (dx / dist) * force;
     const fy = (dy / dist) * force;
@@ -3630,12 +3773,12 @@ function renderMap() {
     mapCtx.lineTo(target.x, target.y);
 
     if (isConnected) {
-      mapCtx.strokeStyle = '#7c6af7';
-      mapCtx.lineWidth = 2.5;
+      mapCtx.strokeStyle = '#a78bfa';
+      mapCtx.lineWidth = 3.0;
     } else {
-      const alpha = Math.max(0.08, (e.similarity - 0.2) * 0.5);
-      mapCtx.strokeStyle = `rgba(124, 106, 247, ${alpha})`;
-      mapCtx.lineWidth = Math.max(0.8, e.similarity * 2);
+      const alpha = Math.max(0.35, Math.min(0.85, (e.similarity - 0.15) * 1.2));
+      mapCtx.strokeStyle = `rgba(139, 120, 247, ${alpha})`;
+      mapCtx.lineWidth = Math.max(1.5, e.similarity * 3.2);
     }
     mapCtx.stroke();
   });
@@ -3651,7 +3794,9 @@ function renderMap() {
     mapCtx.globalAlpha = alpha;
 
     let fillColor = n.color;
-    if (mapColorMode === 'date') {
+    if (mapColorMode === 'group') {
+      fillColor = n.groupColor || n.color;
+    } else if (mapColorMode === 'date') {
       fillColor = getDateColor(n.date);
     }
 
@@ -3789,8 +3934,33 @@ document.getElementById('map-card-open')?.addEventListener('click', () => {
   }
 });
 
-document.getElementById('map-search')?.addEventListener('input', debounce(filterMapNodes, 200));
-document.getElementById('map-tag-filter')?.addEventListener('change', filterMapNodes);
+document.getElementById('map-search')?.addEventListener('input', debounce(() => {
+  filterMapNodes();
+  renderTreeView();
+}, 200));
+
+document.getElementById('map-tag-filter')?.addEventListener('change', () => {
+  filterMapNodes();
+  renderTreeView();
+});
+
+document.getElementById('btn-view-map')?.addEventListener('click', () => {
+  currentMapViewMode = 'map';
+  document.getElementById('btn-view-map').classList.add('active');
+  document.getElementById('btn-view-tree').classList.remove('active');
+  document.getElementById('map-container').style.display = 'block';
+  document.getElementById('map-tree-container').style.display = 'none';
+  if (!mapAnimFrame) runMapLoop();
+});
+
+document.getElementById('btn-view-tree')?.addEventListener('click', () => {
+  currentMapViewMode = 'tree';
+  document.getElementById('btn-view-tree').classList.add('active');
+  document.getElementById('btn-view-map').classList.remove('active');
+  document.getElementById('map-container').style.display = 'none';
+  document.getElementById('map-tree-container').style.display = 'block';
+  renderTreeView();
+});
 
 document.getElementById('map-sim-slider')?.addEventListener('input', e => {
   mapSimThreshold = parseFloat(e.target.value);
@@ -3799,6 +3969,7 @@ document.getElementById('map-sim-slider')?.addEventListener('input', e => {
 
 document.getElementById('map-color-mode')?.addEventListener('change', e => {
   mapColorMode = e.target.value;
+  renderMapLegend();
 });
 
 document.getElementById('map-reset-btn')?.addEventListener('click', () => {
