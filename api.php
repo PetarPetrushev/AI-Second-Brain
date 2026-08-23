@@ -580,17 +580,17 @@ try {
                 }
                 write_json_file("{$dir}/{$entry_id}.json", $entry);
 
-                // Compute embedding and update vector index
+                // Compute embedding and update vector index atomically
                 $vector     = openrouter_embed($content);
                 $index_path = DATA_DIR . '/vectors/index.json';
-                $index      = read_json_file($index_path, []);
-                $index[]    = [
-                    'id'        => $entry_id,
-                    'date'      => $date,
-                    'timestamp' => $now,
-                    'vector'    => $vector,
-                ];
-                write_json_file($index_path, $index);
+                modify_json_file($index_path, function (&$index) use ($entry_id, $date, $now, $vector) {
+                    $index[] = [
+                        'id'        => $entry_id,
+                        'date'      => $date,
+                        'timestamp' => $now,
+                        'vector'    => $vector,
+                    ];
+                }, []);
             } catch (Throwable $bg_e) {
                 $log_dir = DATA_DIR . '/logs';
                 if (!is_dir($log_dir)) mkdir($log_dir, 0755, true);
@@ -625,6 +625,7 @@ try {
 
         case 'update_entry':
             $id      = $body['entry_id'] ?? '';
+            if (!is_string($id) || !preg_match('/^[A-Za-z0-9_.-]+$/', $id)) api_err('Invalid entry_id.');
             $content = trim($body['content'] ?? '');
             $title   = isset($body['title']) ? trim((string)$body['title']) : null;
             $tags    = isset($body['tags']) ? (array)$body['tags'] : null;
@@ -633,15 +634,22 @@ try {
             if (!$updated) api_err('Entry not found.', 404);
             api_ok($updated);
 
+        case 'get_entry':
+            $id = $body['entry_id'] ?? $_GET['entry_id'] ?? '';
+            if (!is_string($id) || !preg_match('/^[A-Za-z0-9_.-]+$/', $id)) api_err('Invalid entry_id.');
+            $entry = get_entry_by_id($id);
+            if (!$entry) api_err('Entry not found.', 404);
+            api_ok($entry);
+
         case 'delete_entry':
-            $id   = $body['entry_id'] ?? '';
-            if (!$id) api_err('entry_id is required.');
+            $id = $body['entry_id'] ?? '';
+            if (!is_string($id) || !preg_match('/^[A-Za-z0-9_.-]+$/', $id)) api_err('Invalid entry_id.');
             $path = entry_id_to_path($id);
             if (!$path) api_err('Entry not found.', 404);
-            // Remove from vector index
-            $index = read_json_file(DATA_DIR . '/vectors/index.json', []);
-            $index = array_values(array_filter($index, fn($v) => $v['id'] !== $id));
-            write_json_file(DATA_DIR . '/vectors/index.json', $index);
+            // Remove from vector index atomically
+            modify_json_file(DATA_DIR . '/vectors/index.json', function (&$index) use ($id) {
+                $index = array_values(array_filter($index, fn($v) => ($v['id'] ?? '') !== $id));
+            }, []);
             unlink($path);
             api_ok(['deleted' => $id]);
 

@@ -474,6 +474,34 @@ main { flex: 1; max-width: 900px; width: 100%; margin: 0 auto; padding: 28px 20p
   white-space: pre-wrap;
   word-break: break-word;
 }
+.map-accessible-list-wrap {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  max-width: 320px;
+  background: rgba(19, 19, 26, 0.88);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  z-index: 5;
+}
+[data-theme="light"] .map-accessible-list-wrap {
+  background: rgba(255, 255, 255, 0.88);
+}
+.map-acc-item {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: var(--transition);
+}
+.map-acc-item:hover {
+  border-color: var(--accent);
+  background: var(--surface3);
+}
 
 /* ── Timeline / Feed Tab ───────────────────────────────────────────────────── */
 .feed-controls {
@@ -1567,7 +1595,7 @@ document.getElementById('login-form')?.addEventListener('submit', async (e) => {
     </div>
 
     <div class="map-container" id="map-container">
-      <canvas id="map-canvas"></canvas>
+      <canvas id="map-canvas" tabindex="0" aria-label="Interactive thought graph canvas"></canvas>
       <div class="map-legend" id="map-legend"></div>
       <div class="map-node-card" id="map-node-card" style="display:none">
         <div class="map-card-header">
@@ -1578,6 +1606,14 @@ document.getElementById('login-form')?.addEventListener('submit', async (e) => {
         <div class="map-card-tags" id="map-card-tags"></div>
         <div class="map-card-preview" id="map-card-preview">Preview</div>
         <button class="btn btn-primary btn-sm mt-2" id="map-card-open">Open Thought ↗️</button>
+      </div>
+
+      <!-- Accessible screen-reader & keyboard outline list -->
+      <div class="map-accessible-list-wrap" id="map-accessible-wrap">
+        <details>
+          <summary style="font-size:12px; color:var(--text2); cursor:pointer; padding:6px 10px;">📋 Accessible Thought List (<span id="map-list-count">0</span>)</summary>
+          <ul id="map-accessible-list" style="max-height:180px; overflow-y:auto; padding:8px 16px; margin:0; font-size:12px; display:flex; flex-direction:column; gap:4px;"></ul>
+        </details>
       </div>
     </div>
   </div>
@@ -3408,14 +3444,45 @@ function filterMapNodes() {
   const query = (document.getElementById('map-search')?.value || '').toLowerCase().trim();
   const selectedTag = (document.getElementById('map-tag-filter')?.value || '').toLowerCase().trim();
 
+  const matching = [];
   mapNodes.forEach(n => {
     let matchQuery = !query || (n.title || '').toLowerCase().includes(query) || (n.preview || '').toLowerCase().includes(query);
     let matchTag   = !selectedTag || (n.tags || []).some(t => t.toLowerCase() === selectedTag);
     n.isMatching = matchQuery && matchTag;
+    if (n.isMatching) {
+      matching.push(n);
+    }
   });
+
+  updateAccessibleMapList(matching);
+}
+
+function updateAccessibleMapList(matchingNodes) {
+  const listEl = document.getElementById('map-accessible-list');
+  const countEl = document.getElementById('map-list-count');
+  if (!listEl) return;
+
+  if (countEl) countEl.textContent = matchingNodes.length;
+
+  if (!matchingNodes.length) {
+    listEl.innerHTML = '<li style="color:var(--text3)">No matching thoughts found</li>';
+    return;
+  }
+
+  listEl.innerHTML = matchingNodes.slice(0, 50).map(n => `
+    <li>
+      <button class="map-acc-item" data-id="${esc(n.id)}" onclick="openEntry('${esc(n.id)}')">
+        <strong>${esc(n.title)}</strong> <span style="font-size:10px; opacity:0.7">(${esc(n.date)})</span>
+      </button>
+    </li>
+  `).join('');
 }
 
 function runMapLoop() {
+  if (!document.getElementById('map-panel')?.classList.contains('active')) {
+    mapAnimFrame = null;
+    return;
+  }
   updateMapPhysics();
   renderMap();
   mapAnimFrame = requestAnimationFrame(runMapLoop);
@@ -3499,10 +3566,12 @@ function renderMap() {
 
   const rect = mapCanvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
+  const targetW = Math.round(rect.width * dpr);
+  const targetH = Math.round(rect.height * dpr);
 
-  if (mapCanvas.width !== rect.width * dpr || mapCanvas.height !== rect.height * dpr) {
-    mapCanvas.width  = rect.width * dpr;
-    mapCanvas.height = rect.height * dpr;
+  if (mapCanvas.width !== targetW || mapCanvas.height !== targetH) {
+    mapCanvas.width  = targetW;
+    mapCanvas.height = targetH;
   }
 
   mapCtx.save();

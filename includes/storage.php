@@ -44,6 +44,47 @@ function write_json_file(string $path, mixed $data): void
     rename($tmp, $path);
 }
 
+/**
+ * Atomically read, modify, and write a JSON file holding an exclusive lock.
+ *
+ * @param  string   $path
+ * @param  callable $callback  fn(mixed &$data): void
+ * @param  mixed    $default
+ * @return mixed               The modified data
+ */
+function modify_json_file(string $path, callable $callback, mixed $default = []): mixed
+{
+    $dir = dirname($path);
+    if (!is_dir($dir)) {
+        mkdir($dir, 0755, true);
+    }
+
+    $fp = fopen($path, 'c+');
+    if (!$fp) {
+        return $default;
+    }
+
+    flock($fp, LOCK_EX);
+    $size = filesize($path);
+    $content = $size > 0 ? fread($fp, $size) : '';
+    $data = $content !== '' ? json_decode($content, true) : null;
+    if (!is_array($data)) {
+        $data = $default;
+    }
+
+    $callback($data);
+
+    $encoded = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    ftruncate($fp, 0);
+    rewind($fp);
+    fwrite($fp, $encoded);
+    fflush($fp);
+    flock($fp, LOCK_UN);
+    fclose($fp);
+
+    return $data;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // VECTOR MATH
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -155,14 +196,19 @@ function search_vector_index(
  */
 function entry_id_to_path(string $entry_id): ?string
 {
+    $entry_id = trim($entry_id);
+    if ($entry_id === '' || !preg_match('/^[A-Za-z0-9_.-]+$/', $entry_id)) {
+        return null;
+    }
+
     // Try to parse date from ID prefix: entry_YYYYMMDD_...
     if (preg_match('/^entry_(\d{4})(\d{2})(\d{2})_/', $entry_id, $m)) {
         $path = DATA_DIR . "/entries/{$m[1]}/{$m[2]}/{$m[3]}/{$entry_id}.json";
         return file_exists($path) ? $path : null;
     }
 
-    // Fallback: scan all entries for the ID
-    $pattern = DATA_DIR . '/entries/*/*/*/*' . $entry_id . '*.json';
+    // Fallback: scan all entries for the ID with exact filename matching
+    $pattern = DATA_DIR . '/entries/*/*/*/' . $entry_id . '.json';
     $files   = glob($pattern);
     return $files ? $files[0] : null;
 }
@@ -217,16 +263,16 @@ function save_thought_entry(string $content, array $tags = []): array
     if (!is_dir($dir)) mkdir($dir, 0755, true);
     write_json_file("{$dir}/{$entry_id}.json", $entry);
 
-    // Append to vector index
+    // Append to vector index atomically
     $index_path = DATA_DIR . '/vectors/index.json';
-    $index      = read_json_file($index_path, []);
-    $index[]    = [
-        'id'        => $entry_id,
-        'date'      => $date,
-        'timestamp' => $now,
-        'vector'    => $vector,
-    ];
-    write_json_file($index_path, $index);
+    modify_json_file($index_path, function (&$index) use ($entry_id, $date, $now, $vector) {
+        $index[] = [
+            'id'        => $entry_id,
+            'date'      => $date,
+            'timestamp' => $now,
+            'vector'    => $vector,
+        ];
+    }, []);
 
     return $entry;
 }
@@ -288,13 +334,18 @@ function update_thought_entry(string $entry_id, string $content, ?string $title 
 
     write_json_file($path, $entry);
 
-    // Re-generate vector embedding if possible and update vector index
+    // Re-generate vector embedding if possible and update vector index atomically
+    $vector = [];
     try {
-        $vector     = openrouter_embed($content);
-        $index_path = DATA_DIR . '/vectors/index.json';
-        $index      = read_json_file($index_path, []);
-        $found      = false;
+        $vector = openrouter_embed($content);
+    } catch (Throwable $e) {
+        // If embedding fails on update, invalidate stale vector data
+        $vector = [];
+    }
 
+    $index_path = DATA_DIR . '/vectors/index.json';
+    modify_json_file($index_path, function (&$index) use ($entry_id, $entry, $vector) {
+        $found = false;
         foreach ($index as &$rec) {
             if (($rec['id'] ?? '') === $entry_id) {
                 $rec['vector']    = $vector;
@@ -313,10 +364,7 @@ function update_thought_entry(string $entry_id, string $content, ?string $title 
                 'vector'    => $vector,
             ];
         }
-        write_json_file($index_path, $index);
-    } catch (Throwable $e) {
-        // Vector update failure shouldn't abort entry saving
-    }
+    }, []);
 
     return $entry;
 }
@@ -800,13 +848,15 @@ function append_chat_session_turn(string $id, array $turn): array
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Generate full network map data of thought nodes and similarity/tag connections.
+ * Generate network map data of thought nodes and similarity/tag connections.
+ * Bounded to top 150 entries to keep calculation fast and memory efficient.
  *
- * @return array{nodes: array, edges: array, tags: array}
+ * @return array{nodes: array, edges: array, tags: array, count: int}
  */
 function get_thought_map_data(): array
 {
-    $entries_data = get_all_entries(['limit' => 500]);
+    // Bound map to the most recent 150 entries for high performance
+    $entries_data = get_all_entries(['limit' => 150]);
     $entries      = $entries_data['entries'] ?? [];
 
     $index_path   = DATA_DIR . '/vectors/index.json';
@@ -845,9 +895,9 @@ function get_thought_map_data(): array
     }
 
     $nodes = [];
-    $node_index_map = [];
+    $node_tags_map = [];
 
-    foreach ($entries as $idx => $e) {
+    foreach ($entries as $e) {
         $id       = $e['id'];
         $tags     = $e['tags'] ?? [];
         $primary  = !empty($tags) ? strtolower(trim($tags[0])) : 'general';
@@ -866,27 +916,29 @@ function get_thought_map_data(): array
             'color'       => $color,
             'hasVector'   => $has_vec,
         ];
-        $node_index_map[$id] = count($nodes) - 1;
+
+        $node_tags_map[$id] = array_map('strtolower', $tags);
     }
 
     $edges = [];
-    $edge_keys = [];
     $node_count = count($nodes);
 
     for ($i = 0; $i < $node_count; $i++) {
-        for ($j = $i + 1; $j < $node_count; $j++) {
-            $nodeA = $nodes[$i];
-            $nodeB = $nodes[$j];
+        $idA = $nodes[$i]['id'];
+        $vecA = $vector_map[$idA] ?? null;
+        $tagsA = $node_tags_map[$idA] ?? [];
 
-            $idA = $nodeA['id'];
-            $idB = $nodeB['id'];
+        for ($j = $i + 1; $j < $node_count; $j++) {
+            $idB = $nodes[$j]['id'];
+            $vecB = $vector_map[$idB] ?? null;
+            $tagsB = $node_tags_map[$idB] ?? [];
 
             $sim = 0.0;
             $type = 'tag';
 
-            // 1. Vector similarity if vectors exist
-            if (!empty($vector_map[$idA]) && !empty($vector_map[$idB])) {
-                $cos_sim = cosine_similarity($vector_map[$idA], $vector_map[$idB]);
+            // 1. Vector similarity if both vectors exist
+            if ($vecA && $vecB) {
+                $cos_sim = cosine_similarity($vecA, $vecB);
                 if ($cos_sim > $sim) {
                     $sim  = $cos_sim;
                     $type = 'vector';
@@ -894,23 +946,20 @@ function get_thought_map_data(): array
             }
 
             // 2. Tag similarity overlap
-            $tagsA = array_map('strtolower', $nodeA['tags']);
-            $tagsB = array_map('strtolower', $nodeB['tags']);
-            $intersection = array_intersect($tagsA, $tagsB);
-
-            if (!empty($intersection)) {
-                $min_len = max(1, min(count($tagsA), count($tagsB)));
-                $tag_sim = count($intersection) / $min_len; // Overlap coefficient
-                if ($tag_sim > $sim) {
-                    $sim  = $tag_sim;
-                    $type = 'tag';
-                } elseif ($type === 'vector' && $sim > 0) {
-                    // Boost vector similarity if they also share tags
-                    $sim = min(1.0, $sim + (0.15 * count($intersection)));
+            if ($tagsA && $tagsB) {
+                $intersection = array_intersect($tagsA, $tagsB);
+                if (!empty($intersection)) {
+                    $min_len = max(1, min(count($tagsA), count($tagsB)));
+                    $tag_sim = count($intersection) / $min_len;
+                    if ($tag_sim > $sim) {
+                        $sim  = $tag_sim;
+                        $type = 'tag';
+                    } elseif ($type === 'vector' && $sim > 0) {
+                        $sim = min(1.0, $sim + (0.15 * count($intersection)));
+                    }
                 }
             }
 
-            // Include edges above threshold (0.20)
             if ($sim >= 0.20) {
                 $edges[] = [
                     'source'     => $idA,
