@@ -5,6 +5,8 @@ Uses OpenRouter.
 
 Fully configurable.
 
+Includes a thought map, linking all your thoughts together in an interactable map.
+
 ---
 
 This is a quickly done vibe coded app made as a personal tool rather than a public thing so it may not be that good.
