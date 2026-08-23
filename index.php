@@ -315,6 +315,166 @@ main { flex: 1; max-width: 900px; width: 100%; margin: 0 auto; padding: 28px 20p
 }
 .capture-shortcut { font-size: 11px; color: var(--text3); }
 
+/* ── Visual Map Tab ────────────────────────────────────────────────────────── */
+.map-controls {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+  background: var(--surface);
+  padding: 12px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+}
+.map-search-group {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  min-width: 260px;
+}
+.map-search-group input { flex: 2; }
+.map-search-group select { flex: 1; min-width: 120px; }
+.map-slider-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text2);
+  white-space: nowrap;
+}
+.map-slider-group input[type="range"] {
+  width: 100px;
+  accent-color: var(--accent);
+}
+.map-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.map-container {
+  position: relative;
+  width: 100%;
+  height: 620px;
+  background: radial-gradient(circle at 50% 50%, #161622 0%, #0d0d12 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: inset 0 0 40px rgba(0,0,0,0.5);
+}
+[data-theme="light"] .map-container {
+  background: radial-gradient(circle at 50% 50%, #f0f0f8 0%, #e2e2ec 100%);
+}
+#map-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+}
+#map-canvas:active {
+  cursor: grabbing;
+}
+.map-legend {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 70%;
+  pointer-events: none;
+}
+.map-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  background: rgba(19, 19, 26, 0.82);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 11px;
+  color: var(--text2);
+  pointer-events: auto;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.map-legend-item:hover {
+  background: var(--surface2);
+  color: var(--text);
+  border-color: var(--accent);
+}
+.map-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.map-node-card {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 300px;
+  background: rgba(19, 19, 26, 0.92);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  box-shadow: var(--shadow);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: map-card-in 0.2s ease-out;
+}
+[data-theme="light"] .map-node-card {
+  background: rgba(255, 255, 255, 0.92);
+}
+@keyframes map-card-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.map-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+.map-card-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.35;
+}
+.map-card-close {
+  background: transparent;
+  border: none;
+  color: var(--text3);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.map-card-close:hover { color: var(--text); background: var(--surface2); }
+.map-card-date {
+  font-size: 11px;
+  color: var(--text3);
+}
+.map-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.map-card-preview {
+  font-size: 12px;
+  color: var(--text2);
+  line-height: 1.5;
+  max-height: 120px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* ── Timeline / Feed Tab ───────────────────────────────────────────────────── */
 .feed-controls {
   display: flex;
@@ -1343,6 +1503,7 @@ document.getElementById('login-form')?.addEventListener('submit', async (e) => {
 <nav>
   <button class="tab-btn active" data-tab="capture">✍️ Capture</button>
   <button class="tab-btn" data-tab="feed">📋 Feed</button>
+  <button class="tab-btn" data-tab="map">🗺️ Thought Map</button>
   <button class="tab-btn" data-tab="chat">💬 Chat</button>
   <button class="tab-btn" data-tab="memories">⚡ Memories</button>
   <button class="tab-btn" data-tab="settings">⚙️ Settings</button>
@@ -1377,6 +1538,47 @@ document.getElementById('login-form')?.addEventListener('submit', async (e) => {
         <button class="btn btn-primary" id="save-btn">💾 Save Thought</button>
       </div>
 
+    </div>
+  </div>
+
+  <!-- ══ Map ══════════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="map-panel" role="tabpanel">
+    <div class="map-controls">
+      <div class="map-search-group">
+        <input type="text" id="map-search" placeholder="🔍 Search thoughts on map…">
+        <select id="map-tag-filter">
+          <option value="">All Tags</option>
+        </select>
+      </div>
+
+      <div class="map-slider-group">
+        <label for="map-sim-slider">Min Link Similarity: <span id="map-sim-val">0.35</span></label>
+        <input type="range" id="map-sim-slider" min="0.20" max="0.85" step="0.05" value="0.35">
+      </div>
+
+      <div class="map-btn-group">
+        <select id="map-color-mode">
+          <option value="tag">Color by Tag</option>
+          <option value="date">Color by Date</option>
+        </select>
+        <button class="btn btn-secondary btn-sm" id="map-reset-btn" title="Reset View">🎯 Reset View</button>
+        <button class="btn btn-secondary btn-sm" id="map-pause-btn" title="Pause Physics">⏸️ Freeze</button>
+      </div>
+    </div>
+
+    <div class="map-container" id="map-container">
+      <canvas id="map-canvas"></canvas>
+      <div class="map-legend" id="map-legend"></div>
+      <div class="map-node-card" id="map-node-card" style="display:none">
+        <div class="map-card-header">
+          <span class="map-card-title" id="map-card-title">Title</span>
+          <button class="map-card-close" id="map-card-close">✕</button>
+        </div>
+        <div class="map-card-date" id="map-card-date">Date</div>
+        <div class="map-card-tags" id="map-card-tags"></div>
+        <div class="map-card-preview" id="map-card-preview">Preview</div>
+        <button class="btn btn-primary btn-sm mt-2" id="map-card-open">Open Thought ↗️</button>
+      </div>
     </div>
   </div>
 
@@ -1590,9 +1792,35 @@ document.getElementById('login-form')?.addEventListener('submit', async (e) => {
     <hr class="separator" style="margin-top:0">
     <div class="entry-detail" id="entry-modal-content">Loading…</div>
     <div class="modal-actions">
+      <button class="btn btn-secondary btn-sm" id="entry-edit-btn">✏️ Edit</button>
       <button class="btn btn-danger btn-sm" id="entry-delete-btn">🗑 Delete</button>
       <button class="btn btn-secondary" id="entry-modal-close">Close</button>
     </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="edit-entry-modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Edit thought" style="max-width:680px">
+    <h2>Edit Thought Entry</h2>
+    <div class="form-group">
+      <label>Title</label>
+      <input type="text" id="edit-entry-title" placeholder="Thought title…">
+    </div>
+    <div class="form-group">
+      <label>Tags (comma separated)</label>
+      <input type="text" id="edit-entry-tags" placeholder="e.g. strategy, ideas, project">
+    </div>
+    <div class="form-group">
+      <label>Content</label>
+      <textarea id="edit-entry-content" rows="8"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="edit-entry-cancel">Cancel</button>
+      <button class="btn btn-primary" id="edit-entry-save">Save Changes</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="edit-turn-modal">
   <div class="modal" role="dialog" aria-modal="true" aria-label="Edit message" style="max-width:540px">
     <h2>Edit Message</h2>
@@ -1791,6 +2019,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.classList.add('active');
     document.getElementById(btn.dataset.tab + '-panel').classList.add('active');
     if (btn.dataset.tab === 'feed') loadFeed(true);
+    if (btn.dataset.tab === 'map') loadThoughtMap();
     if (btn.dataset.tab === 'memories') loadMemories();
     if (btn.dataset.tab === 'settings') loadSettings();
   });
@@ -1978,9 +2207,13 @@ document.getElementById('feed-date').addEventListener('change', () => loadFeed(t
 document.getElementById('feed-tag').addEventListener('input', debounce(() => loadFeed(true), 350));
 document.getElementById('load-more-btn').addEventListener('click', () => { feedOffset += FEED_LIMIT; loadFeed(); });
 
-/* Entry detail modal */
+/* Entry detail modal & editing */
+let viewingEntryId = null;
+let currentViewingEntry = null;
+
 async function openEntry(id) {
   viewingEntryId = id;
+  currentViewingEntry = null;
   const modal = document.getElementById('entry-modal');
   modal.classList.add('open');
   document.getElementById('entry-modal-content').textContent = 'Loading…';
@@ -1989,6 +2222,7 @@ async function openEntry(id) {
 
   try {
     const entry = await api('get_entry', { entry_id: id });
+    currentViewingEntry = entry;
     document.getElementById('entry-modal-title').textContent = entry.title || 'Entry';
     document.getElementById('entry-modal-date').textContent  = formatDate(entry.date);
     document.getElementById('entry-modal-tags').innerHTML = (entry.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('');
@@ -2004,6 +2238,53 @@ document.getElementById('entry-modal-close').addEventListener('click', () => {
 document.getElementById('entry-modal').addEventListener('click', e => {
   if (e.target === e.currentTarget) e.currentTarget.classList.remove('open');
 });
+
+document.getElementById('entry-edit-btn').addEventListener('click', () => {
+  if (!currentViewingEntry) return;
+  document.getElementById('edit-entry-title').value   = currentViewingEntry.title || '';
+  document.getElementById('edit-entry-tags').value    = (currentViewingEntry.tags || []).join(', ');
+  document.getElementById('edit-entry-content').value = currentViewingEntry.content || '';
+  document.getElementById('entry-modal').classList.remove('open');
+  document.getElementById('edit-entry-modal').classList.add('open');
+});
+
+document.getElementById('edit-entry-cancel').addEventListener('click', () => {
+  document.getElementById('edit-entry-modal').classList.remove('open');
+});
+
+document.getElementById('edit-entry-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) e.currentTarget.classList.remove('open');
+});
+
+document.getElementById('edit-entry-save').addEventListener('click', async () => {
+  if (!viewingEntryId) return;
+  const title   = document.getElementById('edit-entry-title').value.trim();
+  const tagsStr = document.getElementById('edit-entry-tags').value.trim();
+  const content = document.getElementById('edit-entry-content').value.trim();
+
+  if (!content) {
+    toast('Thought content cannot be empty.', 'error');
+    return;
+  }
+
+  const tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(Boolean) : [];
+
+  try {
+    const updated = await api('update_entry', {
+      entry_id: viewingEntryId,
+      title,
+      tags,
+      content,
+    });
+    document.getElementById('edit-entry-modal').classList.remove('open');
+    toast('Thought updated!', 'success');
+    await openEntry(viewingEntryId);
+    loadFeed(true);
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+});
+
 document.getElementById('entry-delete-btn').addEventListener('click', async () => {
   if (!viewingEntryId) return;
   if (!confirm('Delete this thought? This cannot be undone.')) return;
@@ -2836,29 +3117,35 @@ document.getElementById('clear-chat-btn').addEventListener('click', () => {
 /* ═══════════════════════════════════════════════════════════════════════════
    MEMORIES TAB
    ═══════════════════════════════════════════════════════════════════════════ */
+let currentMemories = [];
+
 async function loadMemories() {
   const list = document.getElementById('memory-list');
   try {
     const mems = await api('get_memories');
-    if (!mems.length) {
+    currentMemories = mems || [];
+    if (!currentMemories.length) {
       list.innerHTML = '<div class="empty-state"><div class="icon">🧩</div><h3>No memories saved</h3><p>Add persistent facts, goals, or context the AI should always know.</p></div>';
       return;
     }
-    list.innerHTML = mems.map(m => `
+    list.innerHTML = currentMemories.map(m => `
       <div class="memory-card" data-id="${m.id}">
         <div class="memory-body">
           <div class="memory-text">${esc(m.text)}</div>
           <div class="memory-meta">${esc(m.category)} · ${formatDate(m.updated_at || m.created_at)}</div>
         </div>
         <div class="memory-actions">
-          <button class="btn btn-icon btn-secondary edit-mem" data-id="${m.id}" data-text="${esc(m.text)}" data-cat="${esc(m.category)}" title="Edit">✏️</button>
+          <button class="btn btn-icon btn-secondary edit-mem" data-id="${m.id}" title="Edit">✏️</button>
           <button class="btn btn-icon btn-danger del-mem" data-id="${m.id}" title="Delete">🗑</button>
         </div>
       </div>
     `).join('');
 
     list.querySelectorAll('.edit-mem').forEach(btn => {
-      btn.addEventListener('click', () => openMemoryModal(btn.dataset.id, btn.dataset.text, btn.dataset.cat));
+      btn.addEventListener('click', () => {
+        const mem = currentMemories.find(m => m.id === btn.dataset.id);
+        if (mem) openMemoryModal(mem.id, mem.text, mem.category);
+      });
     });
     list.querySelectorAll('.del-mem').forEach(btn => {
       btn.addEventListener('click', () => deleteMemory(btn.dataset.id));
@@ -3014,6 +3301,450 @@ function debounce(fn, ms) {
   let t;
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VISUAL THOUGHT MAP TAB (Force-Directed Graph)
+   ═══════════════════════════════════════════════════════════════════════════ */
+let mapNodes = [];
+let mapEdges = [];
+let mapTags = [];
+let mapNodeMap = {};
+let mapSimThreshold = 0.35;
+let mapPhysicsPaused = false;
+let mapAnimFrame = null;
+let mapColorMode = 'tag';
+
+const mapCamera = { x: 0, y: 0, zoom: 1 };
+let isPanningMap = false;
+let panStart = { x: 0, y: 0 };
+let draggedMapNode = null;
+let hoveredMapNode = null;
+let selectedMapNode = null;
+
+const mapCanvas = document.getElementById('map-canvas');
+const mapCtx = mapCanvas ? mapCanvas.getContext('2d') : null;
+
+async function loadThoughtMap() {
+  if (!mapCanvas || !mapCtx) return;
+  try {
+    const data = await api('get_thought_map');
+    initMapData(data);
+  } catch (e) {
+    toast('Error loading map: ' + e.message, 'error');
+  }
+}
+
+function initMapData(data) {
+  const rawNodes = data.nodes || [];
+  const rawEdges = data.edges || [];
+  mapTags        = data.tags || [];
+
+  // Populate tag filter select dropdown
+  const tagSelect = document.getElementById('map-tag-filter');
+  if (tagSelect) {
+    tagSelect.innerHTML = '<option value="">All Tags (' + rawNodes.length + ')</option>' +
+      mapTags.map(t => `<option value="${esc(t.name)}">${esc(t.name)} (${t.count})</option>`).join('');
+  }
+
+  // Populate map legend
+  const legendEl = document.getElementById('map-legend');
+  if (legendEl) {
+    legendEl.innerHTML = mapTags.slice(0, 8).map(t => `
+      <div class="map-legend-item" data-tag="${esc(t.name)}">
+        <span class="map-legend-dot" style="background:${t.color}"></span>
+        <span>${esc(t.name)}</span>
+      </div>
+    `).join('');
+    legendEl.querySelectorAll('.map-legend-item').forEach(item => {
+      item.addEventListener('click', () => {
+        if (tagSelect) {
+          tagSelect.value = item.dataset.tag;
+          filterMapNodes();
+        }
+      });
+    });
+  }
+
+  // Initialize nodes with random initial positions around center
+  const width  = mapCanvas.clientWidth || 800;
+  const height = mapCanvas.clientHeight || 600;
+  const cx = width / 2;
+  const cy = height / 2;
+
+  mapNodes = rawNodes.map((n, i) => {
+    const angle = (i / Math.max(1, rawNodes.length)) * Math.PI * 2;
+    const dist  = 120 + Math.random() * 180;
+    return {
+      ...n,
+      x: cx + Math.cos(angle) * dist,
+      y: cy + Math.sin(angle) * dist,
+      vx: (Math.random() - 0.5) * 2,
+      vy: (Math.random() - 0.5) * 2,
+      radius: 8 + Math.min(12, (n.tags || []).length * 2),
+      isMatching: true,
+    };
+  });
+
+  mapNodeMap = {};
+  mapNodes.forEach(n => { mapNodeMap[n.id] = n; });
+
+  mapEdges = rawEdges;
+
+  mapCamera.x = 0;
+  mapCamera.y = 0;
+  mapCamera.zoom = 1;
+  selectedMapNode = null;
+  hoveredMapNode = null;
+
+  document.getElementById('map-node-card').style.display = 'none';
+
+  filterMapNodes();
+  if (!mapAnimFrame) {
+    runMapLoop();
+  }
+}
+
+function filterMapNodes() {
+  const query = (document.getElementById('map-search')?.value || '').toLowerCase().trim();
+  const selectedTag = (document.getElementById('map-tag-filter')?.value || '').toLowerCase().trim();
+
+  mapNodes.forEach(n => {
+    let matchQuery = !query || (n.title || '').toLowerCase().includes(query) || (n.preview || '').toLowerCase().includes(query);
+    let matchTag   = !selectedTag || (n.tags || []).some(t => t.toLowerCase() === selectedTag);
+    n.isMatching = matchQuery && matchTag;
+  });
+}
+
+function runMapLoop() {
+  updateMapPhysics();
+  renderMap();
+  mapAnimFrame = requestAnimationFrame(runMapLoop);
+}
+
+function updateMapPhysics() {
+  if (mapPhysicsPaused || !mapNodes.length) return;
+
+  const width  = mapCanvas.clientWidth || 800;
+  const height = mapCanvas.clientHeight || 600;
+  const cx = width / 2;
+  const cy = height / 2;
+
+  // 1. Repulsion between all node pairs
+  const len = mapNodes.length;
+  for (let i = 0; i < len; i++) {
+    const nodeA = mapNodes[i];
+    for (let j = i + 1; j < len; j++) {
+      const nodeB = mapNodes[j];
+      const dx = nodeB.x - nodeA.x;
+      const dy = nodeB.y - nodeA.y;
+      const distSq = dx * dx + dy * dy + 1;
+      const dist = Math.sqrt(distSq);
+
+      if (dist < 350) {
+        const force = 1800 / (distSq + 100);
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+
+        nodeA.vx -= fx;
+        nodeA.vy -= fy;
+        nodeB.vx += fx;
+        nodeB.vy += fy;
+      }
+    }
+  }
+
+  // 2. Spring forces along active edges
+  mapEdges.forEach(e => {
+    if (e.similarity < mapSimThreshold) return;
+    const source = mapNodeMap[e.source];
+    const target = mapNodeMap[e.target];
+    if (!source || !target) return;
+
+    const dx = target.x - source.x;
+    const dy = target.y - source.y;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    const targetDist = 180 * (1 - e.similarity * 0.6);
+    const delta = dist - targetDist;
+    const force = delta * 0.02 * (e.similarity || 0.5);
+
+    const fx = (dx / dist) * force;
+    const fy = (dy / dist) * force;
+
+    source.vx += fx;
+    source.vy += fy;
+    target.vx -= fx;
+    target.vy -= fy;
+  });
+
+  // 3. Central gravity force & velocity damping
+  mapNodes.forEach(n => {
+    if (n === draggedMapNode) return;
+
+    const dx = cx - n.x;
+    const dy = cy - n.y;
+    n.vx += dx * 0.003;
+    n.vy += dy * 0.003;
+
+    // Damping
+    n.vx *= 0.82;
+    n.vy *= 0.82;
+
+    n.x += n.vx;
+    n.y += n.vy;
+  });
+}
+
+function renderMap() {
+  if (!mapCanvas || !mapCtx) return;
+
+  const rect = mapCanvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+
+  if (mapCanvas.width !== rect.width * dpr || mapCanvas.height !== rect.height * dpr) {
+    mapCanvas.width  = rect.width * dpr;
+    mapCanvas.height = rect.height * dpr;
+  }
+
+  mapCtx.save();
+  mapCtx.scale(dpr, dpr);
+  mapCtx.clearRect(0, 0, rect.width, rect.height);
+
+  // Apply camera transformation
+  mapCtx.save();
+  mapCtx.translate(mapCamera.x, mapCamera.y);
+  mapCtx.scale(mapCamera.zoom, mapCamera.zoom);
+
+  // Draw grid lines
+  mapCtx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+  mapCtx.lineWidth = 1;
+  const gridSize = 60;
+  const startX = -2000;
+  const endX   = 3000;
+  const startY = -2000;
+  const endY   = 3000;
+
+  mapCtx.beginPath();
+  for (let x = startX; x <= endX; x += gridSize) {
+    mapCtx.moveTo(x, startY);
+    mapCtx.lineTo(x, endY);
+  }
+  for (let y = startY; y <= endY; y += gridSize) {
+    mapCtx.moveTo(startX, y);
+    mapCtx.lineTo(endX, y);
+  }
+  mapCtx.stroke();
+
+  // Active connected node IDs for hovered/selected node
+  const activeNode = selectedMapNode || hoveredMapNode;
+  const connectedNodeIds = new Set();
+  if (activeNode) {
+    connectedNodeIds.add(activeNode.id);
+    mapEdges.forEach(e => {
+      if (e.similarity >= mapSimThreshold) {
+        if (e.source === activeNode.id) connectedNodeIds.add(e.target);
+        if (e.target === activeNode.id) connectedNodeIds.add(e.source);
+      }
+    });
+  }
+
+  // 1. Draw Edges
+  mapEdges.forEach(e => {
+    if (e.similarity < mapSimThreshold) return;
+    const source = mapNodeMap[e.source];
+    const target = mapNodeMap[e.target];
+    if (!source || !target) return;
+
+    const isConnected = activeNode && (e.source === activeNode.id || e.target === activeNode.id);
+
+    mapCtx.beginPath();
+    mapCtx.moveTo(source.x, source.y);
+    mapCtx.lineTo(target.x, target.y);
+
+    if (isConnected) {
+      mapCtx.strokeStyle = '#7c6af7';
+      mapCtx.lineWidth = 2.5;
+    } else {
+      const alpha = Math.max(0.08, (e.similarity - 0.2) * 0.5);
+      mapCtx.strokeStyle = `rgba(124, 106, 247, ${alpha})`;
+      mapCtx.lineWidth = Math.max(0.8, e.similarity * 2);
+    }
+    mapCtx.stroke();
+  });
+
+  // 2. Draw Nodes
+  mapNodes.forEach(n => {
+    const isHovered = n === hoveredMapNode;
+    const isSelected = n === selectedMapNode;
+    const isConnected = activeNode && connectedNodeIds.has(n.id);
+    const alpha = n.isMatching ? (activeNode ? (isConnected ? 1 : 0.25) : 1) : 0.12;
+
+    mapCtx.save();
+    mapCtx.globalAlpha = alpha;
+
+    let fillColor = n.color;
+    if (mapColorMode === 'date') {
+      fillColor = getDateColor(n.date);
+    }
+
+    // Glow for selected or hovered node
+    if (isSelected || isHovered) {
+      mapCtx.beginPath();
+      mapCtx.arc(n.x, n.y, n.radius + 8, 0, Math.PI * 2);
+      mapCtx.fillStyle = 'rgba(124, 106, 247, 0.25)';
+      mapCtx.fill();
+    }
+
+    // Outer ring
+    mapCtx.beginPath();
+    mapCtx.arc(n.x, n.y, n.radius + (isSelected ? 3 : 0), 0, Math.PI * 2);
+    mapCtx.fillStyle = fillColor;
+    mapCtx.fill();
+    mapCtx.lineWidth = isSelected ? 3 : 1.5;
+    mapCtx.strokeStyle = isSelected ? '#ffffff' : 'rgba(255,255,255,0.4)';
+    mapCtx.stroke();
+
+    // Node label
+    mapCtx.font = (isSelected ? 'bold ' : '') + '12px Inter, sans-serif';
+    mapCtx.fillStyle = isSelected ? '#ffffff' : (isHovered ? '#e8e8f0' : '#a0a0c0');
+    mapCtx.textAlign = 'center';
+    mapCtx.fillText(n.title, n.x, n.y + n.radius + 15);
+
+    mapCtx.restore();
+  });
+
+  mapCtx.restore(); // restore camera
+  mapCtx.restore(); // restore dpr
+}
+
+function getDateColor(dateStr) {
+  if (!dateStr) return '#60a5fa';
+  const time = new Date(dateStr).getTime();
+  const now  = Date.now();
+  const diffDays = Math.max(0, (now - time) / (1000 * 3600 * 24));
+  if (diffDays < 1) return '#34d399';
+  if (diffDays < 7) return '#60a5fa';
+  if (diffDays < 30) return '#a78bfa';
+  return '#fbbf24';
+}
+
+function getNodeAtPos(cx, cy) {
+  const rect = mapCanvas.getBoundingClientRect();
+  const screenX = cx - rect.left;
+  const screenY = cy - rect.top;
+
+  const worldX = (screenX - mapCamera.x) / mapCamera.zoom;
+  const worldY = (screenY - mapCamera.y) / mapCamera.zoom;
+
+  for (let i = mapNodes.length - 1; i >= 0; i--) {
+    const n = mapNodes[i];
+    const dx = worldX - n.x;
+    const dy = worldY - n.y;
+    if (dx * dx + dy * dy <= (n.radius + 6) * (n.radius + 6)) {
+      return n;
+    }
+  }
+  return null;
+}
+
+function selectMapNode(node) {
+  selectedMapNode = node;
+  const card = document.getElementById('map-node-card');
+  if (!node) {
+    if (card) card.style.display = 'none';
+    return;
+  }
+
+  document.getElementById('map-card-title').textContent = node.title || 'Untitled';
+  document.getElementById('map-card-date').textContent  = formatDate(node.date);
+  document.getElementById('map-card-tags').innerHTML  = (node.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join(' ');
+  document.getElementById('map-card-preview').textContent = node.preview || 'No content preview.';
+  card.style.display = 'flex';
+}
+
+if (mapCanvas) {
+  mapCanvas.addEventListener('mousedown', e => {
+    const hitNode = getNodeAtPos(e.clientX, e.clientY);
+    if (hitNode) {
+      draggedMapNode = hitNode;
+      selectMapNode(hitNode);
+    } else {
+      isPanningMap = true;
+      panStart = { x: e.clientX - mapCamera.x, y: e.clientY - mapCamera.y };
+    }
+  });
+
+  window.addEventListener('mousemove', e => {
+    if (draggedMapNode) {
+      const rect = mapCanvas.getBoundingClientRect();
+      const worldX = (e.clientX - rect.left - mapCamera.x) / mapCamera.zoom;
+      const worldY = (e.clientY - rect.top - mapCamera.y) / mapCamera.zoom;
+      draggedMapNode.x = worldX;
+      draggedMapNode.y = worldY;
+      draggedMapNode.vx = 0;
+      draggedMapNode.vy = 0;
+    } else if (isPanningMap) {
+      mapCamera.x = e.clientX - panStart.x;
+      mapCamera.y = e.clientY - panStart.y;
+    } else {
+      hoveredMapNode = getNodeAtPos(e.clientX, e.clientY);
+    }
+  });
+
+  window.addEventListener('mouseup', () => {
+    draggedMapNode = null;
+    isPanningMap = false;
+  });
+
+  mapCanvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const zoomFactor = e.deltaY < 0 ? 1.12 : 0.88;
+    const newZoom = Math.max(0.2, Math.min(4.0, mapCamera.zoom * zoomFactor));
+
+    const rect = mapCanvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    mapCamera.x = mouseX - (mouseX - mapCamera.x) * (newZoom / mapCamera.zoom);
+    mapCamera.y = mouseY - (mouseY - mapCamera.y) * (newZoom / mapCamera.zoom);
+    mapCamera.zoom = newZoom;
+  }, { passive: false });
+}
+
+document.getElementById('map-card-close')?.addEventListener('click', () => {
+  selectMapNode(null);
+});
+
+document.getElementById('map-card-open')?.addEventListener('click', () => {
+  if (selectedMapNode) {
+    openEntry(selectedMapNode.id);
+  }
+});
+
+document.getElementById('map-search')?.addEventListener('input', debounce(filterMapNodes, 200));
+document.getElementById('map-tag-filter')?.addEventListener('change', filterMapNodes);
+
+document.getElementById('map-sim-slider')?.addEventListener('input', e => {
+  mapSimThreshold = parseFloat(e.target.value);
+  document.getElementById('map-sim-val').textContent = mapSimThreshold.toFixed(2);
+});
+
+document.getElementById('map-color-mode')?.addEventListener('change', e => {
+  mapColorMode = e.target.value;
+});
+
+document.getElementById('map-reset-btn')?.addEventListener('click', () => {
+  mapCamera.x = 0;
+  mapCamera.y = 0;
+  mapCamera.zoom = 1;
+  selectedMapNode = null;
+  selectMapNode(null);
+  loadThoughtMap();
+});
+
+document.getElementById('map-pause-btn')?.addEventListener('click', e => {
+  mapPhysicsPaused = !mapPhysicsPaused;
+  e.target.textContent = mapPhysicsPaused ? '▶️ Resume' : '⏸️ Freeze';
+});
 
 /* ── Auth / Logout ───────────────────────────────────────────────────────── */
 document.getElementById('logout-btn')?.addEventListener('click', async () => {

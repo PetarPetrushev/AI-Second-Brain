@@ -603,6 +603,9 @@ try {
             exit;
 
         // ── Read entries ───────────────────────────────────────────────────
+        case 'get_thought_map':
+            api_ok(get_thought_map_data());
+
         case 'get_entries':
             $filters = [
                 'date'   => $body['date']   ?? $_GET['date']   ?? '',
@@ -619,6 +622,16 @@ try {
             $entry = get_entry_by_id($id);
             if (!$entry) api_err('Entry not found.', 404);
             api_ok($entry);
+
+        case 'update_entry':
+            $id      = $body['entry_id'] ?? '';
+            $content = trim($body['content'] ?? '');
+            $title   = isset($body['title']) ? trim((string)$body['title']) : null;
+            $tags    = isset($body['tags']) ? (array)$body['tags'] : null;
+            if (!$id || !$content) api_err('entry_id and content are required.');
+            $updated = update_thought_entry($id, $content, $title, $tags);
+            if (!$updated) api_err('Entry not found.', 404);
+            api_ok($updated);
 
         case 'delete_entry':
             $id   = $body['entry_id'] ?? '';

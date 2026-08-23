@@ -193,8 +193,13 @@ function save_thought_entry(string $content, array $tags = []): array
         $meta['tags'] = array_unique(array_merge($meta['tags'], $tags));
     }
 
-    // Generate embedding
-    $vector = openrouter_embed($content);
+    // Generate embedding (catch errors if API key is invalid/missing)
+    $vector = [];
+    try {
+        $vector = openrouter_embed($content);
+    } catch (Throwable $e) {
+        // Fallback gracefully if embedding service is offline or unconfigured
+    }
 
     $entry = [
         'id'        => $entry_id,
@@ -238,6 +243,82 @@ function get_entry_by_id(string $entry_id): ?array
     if (!$path) return null;
     $data = read_json_file($path, null);
     return is_array($data) ? $data : null;
+}
+
+/**
+ * Update an existing thought entry.
+ *
+ * @param  string      $entry_id
+ * @param  string      $content
+ * @param  string|null $title
+ * @param  array|null  $tags
+ * @return array|null  Updated entry array or null if not found
+ */
+function update_thought_entry(string $entry_id, string $content, ?string $title = null, ?array $tags = null): ?array
+{
+    $path = entry_id_to_path($entry_id);
+    if (!$path) return null;
+
+    $entry = read_json_file($path, null);
+    if (!$entry || !is_array($entry)) return null;
+
+    $content = trim($content);
+    if ($content === '') {
+        throw new InvalidArgumentException('Thought content cannot be empty.');
+    }
+
+    $entry['content']    = $content;
+    $entry['updated_at'] = date('c');
+
+    if ($title !== null && trim($title) !== '') {
+        $entry['title'] = trim($title);
+    } else {
+        // Automatically compute title if missing
+        $meta = extract_thought_metadata($content);
+        if (!empty($meta['title'])) {
+            $entry['title'] = $meta['title'];
+        }
+    }
+
+    if ($tags !== null) {
+        $entry['tags'] = array_values(array_unique(array_filter(array_map('trim', $tags))));
+    }
+
+    $entry['summary'] = substr($content, 0, 200);
+
+    write_json_file($path, $entry);
+
+    // Re-generate vector embedding if possible and update vector index
+    try {
+        $vector     = openrouter_embed($content);
+        $index_path = DATA_DIR . '/vectors/index.json';
+        $index      = read_json_file($index_path, []);
+        $found      = false;
+
+        foreach ($index as &$rec) {
+            if (($rec['id'] ?? '') === $entry_id) {
+                $rec['vector']    = $vector;
+                $rec['timestamp'] = time();
+                $found            = true;
+                break;
+            }
+        }
+        unset($rec);
+
+        if (!$found) {
+            $index[] = [
+                'id'        => $entry_id,
+                'date'      => $entry['date'] ?? date('Y-m-d'),
+                'timestamp' => time(),
+                'vector'    => $vector,
+            ];
+        }
+        write_json_file($index_path, $index);
+    } catch (Throwable $e) {
+        // Vector update failure shouldn't abort entry saving
+    }
+
+    return $entry;
 }
 
 /**
@@ -712,4 +793,148 @@ function append_chat_session_turn(string $id, array $turn): array
     }
 
     return save_chat_session($session);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// THOUGHT MAP / VECTOR GRAPH
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Generate full network map data of thought nodes and similarity/tag connections.
+ *
+ * @return array{nodes: array, edges: array, tags: array}
+ */
+function get_thought_map_data(): array
+{
+    $entries_data = get_all_entries(['limit' => 500]);
+    $entries      = $entries_data['entries'] ?? [];
+
+    $index_path   = DATA_DIR . '/vectors/index.json';
+    $vector_index = read_json_file($index_path, []);
+    $vector_map   = [];
+
+    foreach ($vector_index as $rec) {
+        if (!empty($rec['id']) && !empty($rec['vector']) && is_array($rec['vector'])) {
+            $vector_map[$rec['id']] = $rec['vector'];
+        }
+    }
+
+    $color_palette = [
+        '#7c6af7', '#34d399', '#f87171', '#fbbf24', '#60a5fa',
+        '#a78bfa', '#f472b6', '#38bdf8', '#4ade80', '#fb923c',
+        '#e879f9', '#a3e635', '#2dd4bf', '#facc15', '#c084fc',
+    ];
+
+    $tag_counts = [];
+    $tag_colors = [];
+
+    // Count tags and assign colors
+    foreach ($entries as $e) {
+        foreach ($e['tags'] ?? [] as $t) {
+            $t_clean = strtolower(trim($t));
+            if ($t_clean === '') continue;
+            $tag_counts[$t_clean] = ($tag_counts[$t_clean] ?? 0) + 1;
+        }
+    }
+
+    arsort($tag_counts);
+    $palette_idx = 0;
+    foreach (array_keys($tag_counts) as $t_clean) {
+        $tag_colors[$t_clean] = $color_palette[$palette_idx % count($color_palette)];
+        $palette_idx++;
+    }
+
+    $nodes = [];
+    $node_index_map = [];
+
+    foreach ($entries as $idx => $e) {
+        $id       = $e['id'];
+        $tags     = $e['tags'] ?? [];
+        $primary  = !empty($tags) ? strtolower(trim($tags[0])) : 'general';
+        $color    = $tag_colors[$primary] ?? '#7c6af7';
+        $has_vec  = isset($vector_map[$id]);
+
+        $nodes[] = [
+            'id'          => $id,
+            'title'       => $e['title'] ?? 'Untitled',
+            'summary'     => $e['summary'] ?? '',
+            'tags'        => $tags,
+            'primaryTag'  => $primary,
+            'date'        => $e['date'] ?? '',
+            'created_at'  => $e['created_at'] ?? '',
+            'preview'     => $e['preview'] ?? '',
+            'color'       => $color,
+            'hasVector'   => $has_vec,
+        ];
+        $node_index_map[$id] = count($nodes) - 1;
+    }
+
+    $edges = [];
+    $edge_keys = [];
+    $node_count = count($nodes);
+
+    for ($i = 0; $i < $node_count; $i++) {
+        for ($j = $i + 1; $j < $node_count; $j++) {
+            $nodeA = $nodes[$i];
+            $nodeB = $nodes[$j];
+
+            $idA = $nodeA['id'];
+            $idB = $nodeB['id'];
+
+            $sim = 0.0;
+            $type = 'tag';
+
+            // 1. Vector similarity if vectors exist
+            if (!empty($vector_map[$idA]) && !empty($vector_map[$idB])) {
+                $cos_sim = cosine_similarity($vector_map[$idA], $vector_map[$idB]);
+                if ($cos_sim > $sim) {
+                    $sim  = $cos_sim;
+                    $type = 'vector';
+                }
+            }
+
+            // 2. Tag similarity overlap
+            $tagsA = array_map('strtolower', $nodeA['tags']);
+            $tagsB = array_map('strtolower', $nodeB['tags']);
+            $intersection = array_intersect($tagsA, $tagsB);
+
+            if (!empty($intersection)) {
+                $min_len = max(1, min(count($tagsA), count($tagsB)));
+                $tag_sim = count($intersection) / $min_len; // Overlap coefficient
+                if ($tag_sim > $sim) {
+                    $sim  = $tag_sim;
+                    $type = 'tag';
+                } elseif ($type === 'vector' && $sim > 0) {
+                    // Boost vector similarity if they also share tags
+                    $sim = min(1.0, $sim + (0.15 * count($intersection)));
+                }
+            }
+
+            // Include edges above threshold (0.20)
+            if ($sim >= 0.20) {
+                $edges[] = [
+                    'source'     => $idA,
+                    'target'     => $idB,
+                    'similarity' => round($sim, 4),
+                    'type'       => $type,
+                ];
+            }
+        }
+    }
+
+    $tags_output = [];
+    foreach ($tag_counts as $t_clean => $cnt) {
+        $tags_output[] = [
+            'name'  => $t_clean,
+            'count' => $cnt,
+            'color' => $tag_colors[$t_clean],
+        ];
+    }
+
+    return [
+        'nodes' => $nodes,
+        'edges' => $edges,
+        'tags'  => $tags_output,
+        'count' => count($nodes),
+    ];
 }
