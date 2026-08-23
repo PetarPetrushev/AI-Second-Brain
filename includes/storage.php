@@ -44,6 +44,47 @@ function write_json_file(string $path, mixed $data): void
     rename($tmp, $path);
 }
 
+/**
+ * Atomically read, modify, and write a JSON file holding an exclusive lock.
+ *
+ * @param  string   $path
+ * @param  callable $callback  fn(mixed &$data): void
+ * @param  mixed    $default
+ * @return mixed               The modified data
+ */
+function modify_json_file(string $path, callable $callback, mixed $default = []): mixed
+{
+    $dir = dirname($path);
+    if (!is_dir($dir)) {
+        mkdir($dir, 0755, true);
+    }
+
+    $fp = fopen($path, 'c+');
+    if (!$fp) {
+        return $default;
+    }
+
+    flock($fp, LOCK_EX);
+    $size = filesize($path);
+    $content = $size > 0 ? fread($fp, $size) : '';
+    $data = $content !== '' ? json_decode($content, true) : null;
+    if (!is_array($data)) {
+        $data = $default;
+    }
+
+    $callback($data);
+
+    $encoded = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    ftruncate($fp, 0);
+    rewind($fp);
+    fwrite($fp, $encoded);
+    fflush($fp);
+    flock($fp, LOCK_UN);
+    fclose($fp);
+
+    return $data;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // VECTOR MATH
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -155,14 +196,19 @@ function search_vector_index(
  */
 function entry_id_to_path(string $entry_id): ?string
 {
+    $entry_id = trim($entry_id);
+    if ($entry_id === '' || !preg_match('/^[A-Za-z0-9_.-]+$/', $entry_id)) {
+        return null;
+    }
+
     // Try to parse date from ID prefix: entry_YYYYMMDD_...
     if (preg_match('/^entry_(\d{4})(\d{2})(\d{2})_/', $entry_id, $m)) {
         $path = DATA_DIR . "/entries/{$m[1]}/{$m[2]}/{$m[3]}/{$entry_id}.json";
         return file_exists($path) ? $path : null;
     }
 
-    // Fallback: scan all entries for the ID
-    $pattern = DATA_DIR . '/entries/*/*/*/*' . $entry_id . '*.json';
+    // Fallback: scan all entries for the ID with exact filename matching
+    $pattern = DATA_DIR . '/entries/*/*/*/' . $entry_id . '.json';
     $files   = glob($pattern);
     return $files ? $files[0] : null;
 }
@@ -193,8 +239,13 @@ function save_thought_entry(string $content, array $tags = []): array
         $meta['tags'] = array_unique(array_merge($meta['tags'], $tags));
     }
 
-    // Generate embedding
-    $vector = openrouter_embed($content);
+    // Generate embedding (catch errors if API key is invalid/missing)
+    $vector = [];
+    try {
+        $vector = openrouter_embed($content);
+    } catch (Throwable $e) {
+        // Fallback gracefully if embedding service is offline or unconfigured
+    }
 
     $entry = [
         'id'        => $entry_id,
@@ -212,16 +263,16 @@ function save_thought_entry(string $content, array $tags = []): array
     if (!is_dir($dir)) mkdir($dir, 0755, true);
     write_json_file("{$dir}/{$entry_id}.json", $entry);
 
-    // Append to vector index
+    // Append to vector index atomically
     $index_path = DATA_DIR . '/vectors/index.json';
-    $index      = read_json_file($index_path, []);
-    $index[]    = [
-        'id'        => $entry_id,
-        'date'      => $date,
-        'timestamp' => $now,
-        'vector'    => $vector,
-    ];
-    write_json_file($index_path, $index);
+    modify_json_file($index_path, function (&$index) use ($entry_id, $date, $now, $vector) {
+        $index[] = [
+            'id'        => $entry_id,
+            'date'      => $date,
+            'timestamp' => $now,
+            'vector'    => $vector,
+        ];
+    }, []);
 
     return $entry;
 }
@@ -238,6 +289,84 @@ function get_entry_by_id(string $entry_id): ?array
     if (!$path) return null;
     $data = read_json_file($path, null);
     return is_array($data) ? $data : null;
+}
+
+/**
+ * Update an existing thought entry.
+ *
+ * @param  string      $entry_id
+ * @param  string      $content
+ * @param  string|null $title
+ * @param  array|null  $tags
+ * @return array|null  Updated entry array or null if not found
+ */
+function update_thought_entry(string $entry_id, string $content, ?string $title = null, ?array $tags = null): ?array
+{
+    $path = entry_id_to_path($entry_id);
+    if (!$path) return null;
+
+    $entry = read_json_file($path, null);
+    if (!$entry || !is_array($entry)) return null;
+
+    $content = trim($content);
+    if ($content === '') {
+        throw new InvalidArgumentException('Thought content cannot be empty.');
+    }
+
+    $entry['content']    = $content;
+    $entry['updated_at'] = date('c');
+
+    if ($title !== null && trim($title) !== '') {
+        $entry['title'] = trim($title);
+    } else {
+        // Automatically compute title if missing
+        $meta = extract_thought_metadata($content);
+        if (!empty($meta['title'])) {
+            $entry['title'] = $meta['title'];
+        }
+    }
+
+    if ($tags !== null) {
+        $entry['tags'] = array_values(array_unique(array_filter(array_map('trim', $tags))));
+    }
+
+    $entry['summary'] = substr($content, 0, 200);
+
+    write_json_file($path, $entry);
+
+    // Re-generate vector embedding if possible and update vector index atomically
+    $vector = [];
+    try {
+        $vector = openrouter_embed($content);
+    } catch (Throwable $e) {
+        // If embedding fails on update, invalidate stale vector data
+        $vector = [];
+    }
+
+    $index_path = DATA_DIR . '/vectors/index.json';
+    modify_json_file($index_path, function (&$index) use ($entry_id, $entry, $vector) {
+        $found = false;
+        foreach ($index as &$rec) {
+            if (($rec['id'] ?? '') === $entry_id) {
+                $rec['vector']    = $vector;
+                $rec['timestamp'] = time();
+                $found            = true;
+                break;
+            }
+        }
+        unset($rec);
+
+        if (!$found) {
+            $index[] = [
+                'id'        => $entry_id,
+                'date'      => $entry['date'] ?? date('Y-m-d'),
+                'timestamp' => time(),
+                'vector'    => $vector,
+            ];
+        }
+    }, []);
+
+    return $entry;
 }
 
 /**
@@ -712,4 +841,271 @@ function append_chat_session_turn(string $id, array $turn): array
     }
 
     return save_chat_session($session);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// THOUGHT MAP / VECTOR GRAPH
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Generate network map data of thought nodes and similarity/tag connections.
+ * Bounded to top 150 entries to keep calculation fast and memory efficient.
+ *
+ * @return array{nodes: array, edges: array, tags: array, count: int}
+ */
+function get_thought_map_data(): array
+{
+    // Bound map to the most recent 150 entries for high performance
+    $entries_data = get_all_entries(['limit' => 150]);
+    $entries      = $entries_data['entries'] ?? [];
+
+    $index_path   = DATA_DIR . '/vectors/index.json';
+    $vector_index = read_json_file($index_path, []);
+    $vector_map   = [];
+
+    foreach ($vector_index as $rec) {
+        if (!empty($rec['id']) && !empty($rec['vector']) && is_array($rec['vector'])) {
+            $vector_map[$rec['id']] = $rec['vector'];
+        }
+    }
+
+    $color_palette = [
+        '#7c6af7', '#34d399', '#f87171', '#fbbf24', '#60a5fa',
+        '#a78bfa', '#f472b6', '#38bdf8', '#4ade80', '#fb923c',
+        '#e879f9', '#a3e635', '#2dd4bf', '#facc15', '#c084fc',
+    ];
+
+    $tag_counts = [];
+    $tag_colors = [];
+
+    // Count tags and assign colors
+    foreach ($entries as $e) {
+        foreach ($e['tags'] ?? [] as $t) {
+            $t_clean = strtolower(trim($t));
+            if ($t_clean === '') continue;
+            $tag_counts[$t_clean] = ($tag_counts[$t_clean] ?? 0) + 1;
+        }
+    }
+
+    arsort($tag_counts);
+    $palette_idx = 0;
+    foreach (array_keys($tag_counts) as $t_clean) {
+        $tag_colors[$t_clean] = $color_palette[$palette_idx % count($color_palette)];
+        $palette_idx++;
+    }
+
+    $nodes = [];
+    $node_tags_map = [];
+
+    foreach ($entries as $e) {
+        $id       = $e['id'];
+        $tags     = $e['tags'] ?? [];
+        $primary  = !empty($tags) ? strtolower(trim($tags[0])) : 'general';
+        $color    = $tag_colors[$primary] ?? '#7c6af7';
+        $has_vec  = isset($vector_map[$id]);
+
+        $nodes[] = [
+            'id'          => $id,
+            'title'       => $e['title'] ?? 'Untitled',
+            'summary'     => $e['summary'] ?? '',
+            'tags'        => $tags,
+            'primaryTag'  => $primary,
+            'date'        => $e['date'] ?? '',
+            'created_at'  => $e['created_at'] ?? '',
+            'preview'     => $e['preview'] ?? '',
+            'color'       => $color,
+            'hasVector'   => $has_vec,
+        ];
+
+        $node_tags_map[$id] = array_map('strtolower', $tags);
+    }
+
+    $edges = [];
+    $node_count = count($nodes);
+
+    for ($i = 0; $i < $node_count; $i++) {
+        $idA = $nodes[$i]['id'];
+        $vecA = $vector_map[$idA] ?? null;
+        $tagsA = $node_tags_map[$idA] ?? [];
+
+        for ($j = $i + 1; $j < $node_count; $j++) {
+            $idB = $nodes[$j]['id'];
+            $vecB = $vector_map[$idB] ?? null;
+            $tagsB = $node_tags_map[$idB] ?? [];
+
+            $sim = 0.0;
+            $type = 'tag';
+
+            // 1. Vector similarity if both vectors exist
+            if ($vecA && $vecB) {
+                $cos_sim = cosine_similarity($vecA, $vecB);
+                if ($cos_sim > $sim) {
+                    $sim  = $cos_sim;
+                    $type = 'vector';
+                }
+            }
+
+            // 2. Tag similarity overlap
+            if ($tagsA && $tagsB) {
+                $intersection = array_intersect($tagsA, $tagsB);
+                if (!empty($intersection)) {
+                    $min_len = max(1, min(count($tagsA), count($tagsB)));
+                    $tag_sim = count($intersection) / $min_len;
+                    if ($tag_sim > $sim) {
+                        $sim  = $tag_sim;
+                        $type = 'tag';
+                    } elseif ($type === 'vector' && $sim > 0) {
+                        $sim = min(1.0, $sim + (0.15 * count($intersection)));
+                    }
+                }
+            }
+
+            if ($sim >= 0.20) {
+                $edges[] = [
+                    'source'     => $idA,
+                    'target'     => $idB,
+                    'similarity' => round($sim, 4),
+                    'type'       => $type,
+                ];
+            }
+        }
+    }
+
+    // Find connected components (groups/clusters) for edges with similarity >= 0.30
+    $adj = [];
+    foreach ($nodes as $n) {
+        $adj[$n['id']] = [];
+    }
+    foreach ($edges as $e) {
+        if ($e['similarity'] >= 0.30) {
+            $adj[$e['source']][] = $e['target'];
+            $adj[$e['target']][] = $e['source'];
+        }
+    }
+
+    $visited = [];
+    $groups = [];
+    $group_index = 0;
+
+    foreach ($nodes as $n) {
+        $nid = $n['id'];
+        if (isset($visited[$nid])) continue;
+
+        $group_index++;
+        $gid = "group_{$group_index}";
+        $queue = [$nid];
+        $visited[$nid] = $gid;
+        $component_node_ids = [];
+
+        while (!empty($queue)) {
+            $curr = array_shift($queue);
+            $component_node_ids[] = $curr;
+            foreach ($adj[$curr] ?? [] as $neighbor) {
+                if (!isset($visited[$neighbor])) {
+                    $visited[$neighbor] = $gid;
+                    $queue[] = $neighbor;
+                }
+            }
+        }
+
+        // Determine dominant tag for group naming
+        $group_tag_counts = [];
+        foreach ($component_node_ids as $cnid) {
+            foreach ($node_tags_map[$cnid] ?? [] as $gt) {
+                $group_tag_counts[$gt] = ($group_tag_counts[$gt] ?? 0) + 1;
+            }
+        }
+        arsort($group_tag_counts);
+        $top_tag = !empty($group_tag_counts) ? ucfirst(key($group_tag_counts)) : 'General';
+
+        $g_color = $color_palette[($group_index - 1) % count($color_palette)];
+
+        $groups[$gid] = [
+            'id'       => $gid,
+            'name'     => count($component_node_ids) > 1 ? "Cluster {$group_index}: {$top_tag}" : "Standalone: {$top_tag}",
+            'topTag'   => $top_tag,
+            'color'    => $g_color,
+            'size'     => count($component_node_ids),
+            'nodeIds'  => $component_node_ids,
+        ];
+    }
+
+    // Attach group info to nodes
+    foreach ($nodes as &$n) {
+        $gid = $visited[$n['id']] ?? 'group_1';
+        $n['groupId']    = $gid;
+        $n['groupColor'] = $groups[$gid]['color'] ?? '#7c6af7';
+        $n['groupName']  = $groups[$gid]['name'] ?? 'General';
+    }
+    unset($n);
+
+    // Build hierarchical tree structure: Groups -> Primary Tags / Thoughts
+    $tree = [];
+    foreach ($groups as $gid => $ginfo) {
+        $group_tree_node = [
+            'id'       => $gid,
+            'name'     => $ginfo['name'],
+            'color'    => $ginfo['color'],
+            'count'    => $ginfo['size'],
+            'type'     => 'group',
+            'children' => [],
+        ];
+
+        // Group nodes by primary tag
+        $tag_subgroups = [];
+        foreach ($nodes as $n) {
+            if ($n['groupId'] === $gid) {
+                $ptag = !empty($n['primaryTag']) ? ucfirst($n['primaryTag']) : 'General';
+                if (!isset($tag_subgroups[$ptag])) {
+                    $tag_subgroups[$ptag] = [];
+                }
+                $tag_subgroups[$ptag][] = [
+                    'id'      => $n['id'],
+                    'name'    => $n['title'],
+                    'date'    => $n['date'],
+                    'tags'    => $n['tags'],
+                    'preview' => $n['preview'],
+                    'color'   => $n['groupColor'],
+                    'type'    => 'thought',
+                ];
+            }
+        }
+
+        foreach ($tag_subgroups as $tag_name => $thought_items) {
+            if (count($tag_subgroups) === 1 && $tag_name === $ginfo['topTag']) {
+                foreach ($thought_items as $ti) {
+                    $group_tree_node['children'][] = $ti;
+                }
+            } else {
+                $group_tree_node['children'][] = [
+                    'id'       => "{$gid}_tag_{$tag_name}",
+                    'name'     => $tag_name,
+                    'type'     => 'tag',
+                    'count'    => count($thought_items),
+                    'color'    => $ginfo['color'],
+                    'children' => $thought_items,
+                ];
+            }
+        }
+
+        $tree[] = $group_tree_node;
+    }
+
+    $tags_output = [];
+    foreach ($tag_counts as $t_clean => $cnt) {
+        $tags_output[] = [
+            'name'  => $t_clean,
+            'count' => $cnt,
+            'color' => $tag_colors[$t_clean],
+        ];
+    }
+
+    return [
+        'nodes'  => $nodes,
+        'edges'  => $edges,
+        'tags'   => $tags_output,
+        'groups' => array_values($groups),
+        'tree'   => $tree,
+        'count'  => count($nodes),
+    ];
 }
